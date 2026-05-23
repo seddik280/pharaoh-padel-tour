@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <!-- Outer circle -->
+  <circle cx="60" cy="60" r="58" fill="#1a9e5c" />
+  <circle cx="60" cy="60" r="54" fill="#157a47" />
+
+  <!-- Nemes headdress (pharaoh crown stripes) -->
+  <path d="M38 42 Q60 28 82 42 L80 50 Q60 38 40 50 Z" fill="#f59e0b"/>
+  <path d="M38 42 L36 62 Q32 70 30 80 L38 78 Q40 70 42 62 L40 50 Z" fill="#f59e0b"/>
+  <path d="M82 42 L84 62 Q88 70 90 80 L82 78 Q80 70 78 62 L80 50 Z" fill="#f59e0b"/>
+  <!-- Headdress stripes left -->
+  <line x1="37" y1="50" x2="35" y2="60" stroke="#d97706" stroke-width="1.5"/>
+  <line x1="36" y1="57" x2="34" y2="67" stroke="#d97706" stroke-width="1.5"/>
+  <line x1="35" y1="65" x2="33" y2="74" stroke="#d97706" stroke-width="1.5"/>
+  <!-- Headdress stripes right -->
+  <line x1="83" y1="50" x2="85" y2="60" stroke="#d97706" stroke-width="1.5"/>
+  <line x1="84" y1="57" x2="86" y2="67" stroke="#d97706" stroke-width="1.5"/>
+  <line x1="85" y1="65" x2="87" y2="74" stroke="#d97706" stroke-width="1.5"/>
+
+  <!-- Face -->
+  <ellipse cx="60" cy="60" rx="18" ry="20" fill="#fde68a"/>
+
+  <!-- Uraeus (cobra) on forehead -->
+  <path d="M57 42 Q60 36 63 42 Q62 46 60 45 Q58 46 57 42Z" fill="#f59e0b"/>
+  <circle cx="60" cy="40" r="2" fill="#d97706"/>
+
+  <!-- Eyes -->
+  <ellipse cx="54" cy="57" rx="3.5" ry="2.5" fill="white"/>
+  <ellipse cx="66" cy="57" rx="3.5" ry="2.5" fill="white"/>
+  <circle cx="54.5" cy="57" r="1.8" fill="#1a1a1a"/>
+  <circle cx="66.5" cy="57" r="1.8" fill="#1a1a1a"/>
+  <!-- Kohl eye lines -->
+  <path d="M50 57 L53 56" stroke="#1a1a1a" stroke-width="1" stroke-linecap="round"/>
+  <path d="M57.5 56 L60 55.5" stroke="#1a1a1a" stroke-width="1" stroke-linecap="round"/>
+  <path d="M62.5 56 L65 55.5" stroke="#1a1a1a" stroke-width="1" stroke-linecap="round"/>
+  <path d="M69.5 57 L72 56" stroke="#1a1a1a" stroke-width="1" stroke-linecap="round"/>
+
+  <!-- Nose -->
+  <path d="M59 60 Q58 64 60 65 Q62 64 61 60" fill="#f5c867" stroke="#d97706" stroke-width="0.5"/>
+
+  <!-- Mouth -->
+  <path d="M55 69 Q60 73 65 69" stroke="#d97706" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Padel racket (small, held) -->
+  <rect x="72" y="72" width="22" height="16" rx="8" fill="white" opacity="0.9"/>
+  <rect x="72" y="72" width="22" height="16" rx="8" fill="none" stroke="#1a9e5c" stroke-width="1.5"/>
+  <!-- Racket grid -->
+  <line x1="78" y1="72" x2="78" y2="88" stroke="#1a9e5c" stroke-width="0.8" opacity="0.5"/>
+  <line x1="83" y1="72" x2="83" y2="88" stroke="#1a9e5c" stroke-width="0.8" opacity="0.5"/>
+  <line x1="88" y1="72" x2="88" y2="88" stroke="#1a9e5c" stroke-width="0.8" opacity="0.5"/>
+  <line x1="72" y1="78" x2="94" y2="78" stroke="#1a9e5c" stroke-width="0.8" opacity="0.5"/>
+  <line x1="72" y1="83" x2="94" y2="83" stroke="#1a9e5c" stroke-width="0.8" opacity="0.5"/>
+  <!-- Handle -->
+  <rect x="80" y="87" width="4" height="10" rx="2" fill="#f59e0b"/>
+
+  <!-- Gold necklace -->
+  <path d="M42 70 Q60 78 78 70" stroke="#f59e0b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <circle cx="60" cy="77" r="3" fill="#f59e0b"/>
+  <circle cx="50" cy="74" r="2" fill="#f59e0b"/>
+  <circle cx="70" cy="74" r="2" fill="#f59e0b"/>
+</svg>

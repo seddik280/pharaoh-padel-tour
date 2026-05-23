@@ -1,0 +1,21 @@
+{
+  "name": "padelpro-tests",
+  "version": "1.0.0",
+  "description": "PadelPro API Tests — Mocha + Chai + Supertest",
+  "scripts": {
+    "test":      "mocha --exit --timeout 10000 '*.test.js'",
+    "test:auth": "mocha --exit --timeout 10000 auth.test.js",
+    "test:users": "mocha --exit --timeout 10000 users.test.js",
+    "test:tournaments": "mocha --exit --timeout 10000 tournaments.test.js",
+    "test:matches": "mocha --exit --timeout 10000 matches.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "chai": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "^9.0.2",
+    "mocha": "^10.4.0",
+    "mongoose": "^8.4.0",
+    "supertest": "^7.0.0"
+  }
+}

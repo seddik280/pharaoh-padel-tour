@@ -1,0 +1,11 @@
+{
+  "name": "padelpro",
+  "version": "1.0.0",
+  "description": "PadelPro Tournament Management — root launcher",
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail -n \"AUTH,USERS,TOURNAMENTS,MATCHES,GATEWAY,FRONTEND\" -c \"blue,cyan,green,yellow,magenta,white\" \"cd services/auth-service && npm run dev\" \"cd services/user-service && npm run dev\" \"cd services/tournament-service && npm run dev\" \"cd services/match-service && npm run dev\" \"cd services/api-gateway && npm run dev\" \"cd frontend && npm run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

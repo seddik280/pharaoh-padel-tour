@@ -1,0 +1,2214 @@
+PHARAOH PADEL TOUR — Full Project Code
+Upload this file to Claude.ai and ask any question about the code in Arabic.
+========================================================
+
+========================================================
+FILE: backend/server.js
+========================================================
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+require('dotenv').config();
+
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/tournaments', require('./routes/tournaments'));
+app.use('/api/matches', require('./routes/matches'));
+app.use('/api/registrations', require('./routes/registrations'));
+
+// Health check
+app.get('/', (req, res) => res.json({ message: 'PadelPro API running' }));
+
+// Connect to MongoDB and start server
+const PORT = process.env.PORT || 5000;
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log('MongoDB connected');
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch(err => console.error('MongoDB connection error:', err));
+
+
+========================================================
+FILE: backend/middleware/auth.js
+========================================================
+const jwt = require('jsonwebtoken');
+
+module.exports = (req, res, next) => {
+  const token = req.header('Authorization')?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ message: 'No token, access denied' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ message: 'Token is not valid' });
+  }
+};
+
+
+========================================================
+FILE: backend/models/User.js
+========================================================
+const mongoose = require('mongoose');
+
+const UserSchema = new mongoose.Schema({
+  name:     { type: String, required: true, trim: true },
+  email:    { type: String, required: true, unique: true, lowercase: true, trim: true },
+  password: { type: String, required: true },
+  points:   { type: Number, default: 0 },
+  role:     { type: String, enum: ['player', 'admin'], default: 'player' },
+  createdAt:{ type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('User', UserSchema);
+
+
+========================================================
+FILE: backend/models/Tournament.js
+========================================================
+const mongoose = require('mongoose');
+
+const TournamentSchema = new mongoose.Schema({
+  name:     { type: String, required: true, trim: true },
+  category: { type: String, enum: ['Beginner', 'D', 'C'], required: true },
+  date:     { type: String, required: true },
+  status:   { type: String, enum: ['upcoming', 'active', 'completed'], default: 'upcoming' },
+  createdAt:{ type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Tournament', TournamentSchema);
+
+
+========================================================
+FILE: backend/models/Match.js
+========================================================
+const mongoose = require('mongoose');
+
+const MatchSchema = new mongoose.Schema({
+  tournament: { type: mongoose.Schema.Types.ObjectId, ref: 'Tournament', required: true },
+  player1:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  player2:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  winner:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  round:      { type: String, enum: ['quarter', 'semi', 'final'], required: true },
+  createdAt:  { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Match', MatchSchema);
+
+
+========================================================
+FILE: backend/models/Registration.js
+========================================================
+const mongoose = require('mongoose');
+
+const RegistrationSchema = new mongoose.Schema({
+  player:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  tournament: { type: mongoose.Schema.Types.ObjectId, ref: 'Tournament', required: true },
+  createdAt:  { type: Date, default: Date.now }
+});
+
+RegistrationSchema.index({ player: 1, tournament: 1 }, { unique: true });
+
+module.exports = mongoose.model('Registration', RegistrationSchema);
+
+
+========================================================
+FILE: backend/models/PointsHistory.js
+========================================================
+const mongoose = require('mongoose');
+
+const PointsHistorySchema = new mongoose.Schema({
+  player:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  points:     { type: Number, required: true },
+  reason:     { type: String, required: true },
+  tournament: { type: mongoose.Schema.Types.ObjectId, ref: 'Tournament' },
+  date:       { type: String, default: () => new Date().toISOString().split('T')[0] },
+  createdAt:  { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('PointsHistory', PointsHistorySchema);
+
+
+========================================================
+FILE: backend/routes/auth.js
+========================================================
+const express = require('express');
+const router = express.Router();
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+
+// POST /api/auth/register
+router.post('/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password)
+      return res.status(400).json({ message: 'All fields are required' });
+    if (password.length < 3)
+      return res.status(400).json({ message: 'Password must be at least 3 characters' });
+
+    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (existing) return res.status(400).json({ message: 'Email already registered' });
+
+    const hashed = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, email, password: hashed });
+
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({
+      token,
+      user: { id: user._id, name: user.name, email: user.email, points: user.points, role: user.role }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// POST /api/auth/login
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ message: 'Email and password required' });
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) return res.status(400).json({ message: 'Invalid email or password' });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ message: 'Invalid email or password' });
+
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.json({
+      token,
+      user: { id: user._id, name: user.name, email: user.email, points: user.points, role: user.role }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+module.exports = router;
+
+
+========================================================
+FILE: backend/routes/tournaments.js
+========================================================
+const express = require('express');
+const router = express.Router();
+const Tournament = require('../models/Tournament');
+const Registration = require('../models/Registration');
+const Match = require('../models/Match');
+const User = require('../models/User');
+const PointsHistory = require('../models/PointsHistory');
+const auth = require('../middleware/auth');
+
+const POINTS = {
+  Beginner: { winner: 300, finalist: 200, semi: 120, quarter: 60 },
+  D:        { winner: 600, finalist: 400, semi: 240, quarter: 120 },
+  C:        { winner: 1000, finalist: 600, semi: 360, quarter: 180 }
+};
+
+// GET /api/tournaments
+router.get('/', async (req, res) => {
+  try {
+    const tournaments = await Tournament.find().sort({ date: -1 });
+    res.json(tournaments);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/tournaments/:id
+router.get('/:id', async (req, res) => {
+  try {
+    const tournament = await Tournament.findById(req.params.id);
+    if (!tournament) return res.status(404).json({ message: 'Tournament not found' });
+    res.json(tournament);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/tournaments — admin only
+router.post('/', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    const { name, category, date } = req.body;
+    if (!name || !category || !date)
+      return res.status(400).json({ message: 'All fields required' });
+    const tournament = await Tournament.create({ name, category, date });
+    res.status(201).json(tournament);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// PUT /api/tournaments/:id/status — admin only
+router.put('/:id/status', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    const { status } = req.body;
+    const tournament = await Tournament.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    res.json(tournament);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/tournaments/:id/complete — admin: complete & award points
+router.post('/:id/complete', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    const tournament = await Tournament.findById(req.params.id);
+    if (!tournament) return res.status(404).json({ message: 'Not found' });
+
+    const matches = await Match.find({ tournament: req.params.id });
+    const pts = POINTS[tournament.category];
+    const awarded = new Set();
+
+    for (const m of matches) {
+      if (!m.winner) continue;
+      const loserId = m.winner.toString() === m.player1.toString() ? m.player2 : m.player1;
+      let winnerPts = 0, loserPts = 0;
+      if (m.round === 'final')   { winnerPts = pts.winner;   loserPts = pts.finalist; }
+      if (m.round === 'semi')    { winnerPts = pts.semi;     loserPts = pts.quarter; }
+      if (m.round === 'quarter') { winnerPts = pts.quarter;  loserPts = 0; }
+
+      const label = m.round === 'final' ? 'Winner' : m.round === 'semi' ? 'Semi-final' : 'Quarter-final';
+
+      if (winnerPts && !awarded.has('w' + m.winner)) {
+        await User.findByIdAndUpdate(m.winner, { $inc: { points: winnerPts } });
+        await PointsHistory.create({ player: m.winner, points: winnerPts, reason: `${label} — ${tournament.name}`, tournament: tournament._id });
+        awarded.add('w' + m.winner);
+      }
+      if (loserPts && !awarded.has('l' + loserId)) {
+        await User.findByIdAndUpdate(loserId, { $inc: { points: loserPts } });
+        await PointsHistory.create({ player: loserId, points: loserPts, reason: `${m.round === 'final' ? 'Finalist' : 'Semi-final'} — ${tournament.name}`, tournament: tournament._id });
+        awarded.add('l' + loserId);
+      }
+    }
+    tournament.status = 'completed';
+    await tournament.save();
+    res.json({ message: 'Tournament completed and points awarded', tournament });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+module.exports = router;
+
+
+========================================================
+FILE: backend/routes/registrations.js
+========================================================
+const express = require('express');
+const router = express.Router();
+const Registration = require('../models/Registration');
+const Tournament = require('../models/Tournament');
+const User = require('../models/User');
+const auth = require('../middleware/auth');
+
+function getCategory(points) {
+  if (points >= 1200) return 'C';
+  if (points >= 500) return 'D';
+  return 'Beginner';
+}
+
+// GET /api/registrations?tournament=id
+router.get('/', async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.tournament) filter.tournament = req.query.tournament;
+    if (req.query.player) filter.player = req.query.player;
+    const regs = await Registration.find(filter)
+      .populate('player', 'name email points')
+      .populate('tournament', 'name category date status');
+    res.json(regs);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/registrations — register current user
+router.post('/', auth, async (req, res) => {
+  try {
+    const { tournamentId } = req.body;
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) return res.status(404).json({ message: 'Tournament not found' });
+    if (tournament.status !== 'upcoming')
+      return res.status(400).json({ message: 'Registration is closed for this tournament' });
+
+    const user = await User.findById(req.user.id);
+    const playerCat = getCategory(user.points);
+    const order = ['Beginner', 'D', 'C'];
+    if (order.indexOf(playerCat) > order.indexOf(tournament.category))
+      return res.status(400).json({ message: `${playerCat} players cannot join ${tournament.category} tournaments` });
+
+    const existing = await Registration.findOne({ player: req.user.id, tournament: tournamentId });
+    if (existing) return res.status(400).json({ message: 'Already registered' });
+
+    const reg = await Registration.create({ player: req.user.id, tournament: tournamentId });
+    await reg.populate('tournament', 'name category date');
+    res.status(201).json(reg);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// DELETE /api/registrations/:id — cancel your own registration (upcoming tournaments only)
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const reg = await Registration.findById(req.params.id).populate('tournament');
+    if (!reg)
+      return res.status(404).json({ message: 'Registration not found.' });
+
+    if (reg.player.toString() !== req.user.id)
+      return res.status(403).json({ message: 'You can only cancel your own registration.' });
+
+    if (reg.tournament?.status !== 'upcoming')
+      return res.status(400).json({ message: 'Cannot cancel registration after the tournament has started.' });
+
+    await reg.deleteOne();
+    res.json({ message: 'Registration cancelled successfully.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+module.exports = router;
+
+
+========================================================
+FILE: backend/routes/matches.js
+========================================================
+const express = require('express');
+const router = express.Router();
+const Match = require('../models/Match');
+const auth = require('../middleware/auth');
+
+// GET /api/matches?tournament=id
+router.get('/', async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.tournament) filter.tournament = req.query.tournament;
+    const matches = await Match.find(filter)
+      .populate('player1', 'name points')
+      .populate('player2', 'name points')
+      .populate('winner', 'name')
+      .populate('tournament', 'name category');
+    res.json(matches);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/matches — admin only
+router.post('/', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    const { tournament, player1, player2, winner, round } = req.body;
+    if (!tournament || !player1 || !player2 || !winner || !round)
+      return res.status(400).json({ message: 'All fields required' });
+    if (player1 === player2)
+      return res.status(400).json({ message: 'Players must be different' });
+
+    const match = await Match.create({ tournament, player1, player2, winner, round });
+    const populated = await Match.findById(match._id)
+      .populate('player1', 'name')
+      .populate('player2', 'name')
+      .populate('winner', 'name')
+      .populate('tournament', 'name');
+    res.status(201).json(populated);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+module.exports = router;
+
+
+========================================================
+FILE: backend/routes/users.js
+========================================================
+const express = require('express');
+const router = express.Router();
+const bcrypt = require('bcryptjs');
+const User = require('../models/User');
+const PointsHistory = require('../models/PointsHistory');
+const auth = require('../middleware/auth');
+
+// GET /api/users — all players (public leaderboard)
+router.get('/', async (req, res) => {
+  try {
+    const users = await User.find({ role: 'player' }, '-password').sort({ points: -1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/users/me — current user profile
+router.get('/me', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id, '-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// PUT /api/users/me — update profile
+router.put('/me', auth, async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email) return res.status(400).json({ message: 'Name and email required' });
+
+    const updates = { name, email };
+    if (password && password.length >= 3) {
+      updates.password = await bcrypt.hash(password, 10);
+    }
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true, select: '-password' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/users/:id/history — points history for a user
+router.get('/:id/history', auth, async (req, res) => {
+  try {
+    const history = await PointsHistory.find({ player: req.params.id })
+      .populate('tournament', 'name')
+      .sort({ createdAt: -1 });
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/users/:id/award — admin awards points manually
+router.post('/:id/award', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    const { points, reason } = req.body;
+    if (!points || !reason) return res.status(400).json({ message: 'Points and reason required' });
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { points: Number(points) } },
+      { new: true, select: '-password' }
+    );
+    await PointsHistory.create({ player: req.params.id, points: Number(points), reason });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
+
+
+========================================================
+FILE: frontend/src/context/AuthContext.jsx
+========================================================
+import { createContext, useContext, useState, useEffect } from 'react'
+import axios from 'axios'
+
+const AuthContext = createContext(null)
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [token, setToken] = useState(localStorage.getItem('pp_token') || null)
+  const [loading, setLoading] = useState(true)
+
+  const normalize = (u) => ({ ...u, id: u.id || u._id })
+
+  useEffect(() => {
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      axios.get('/api/users/me')
+        .then(res => setUser(normalize(res.data)))
+        .catch(() => logout())
+        .finally(() => setLoading(false))
+    } else {
+      setLoading(false)
+    }
+  }, [token])
+
+  const login = async (email, password) => {
+    const res = await axios.post('/api/auth/login', { email, password })
+    setToken(res.data.token)
+    setUser(res.data.user)
+    localStorage.setItem('pp_token', res.data.token)
+    axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`
+    return res.data.user
+  }
+
+  const register = async (name, email, password) => {
+    const res = await axios.post('/api/auth/register', { name, email, password })
+    setToken(res.data.token)
+    setUser(res.data.user)
+    localStorage.setItem('pp_token', res.data.token)
+    axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`
+    return res.data.user
+  }
+
+  const logout = () => {
+    setUser(null)
+    setToken(null)
+    localStorage.removeItem('pp_token')
+    delete axios.defaults.headers.common['Authorization']
+  }
+
+  const refreshUser = async () => {
+    const res = await axios.get('/api/users/me')
+    const u = normalize(res.data)
+    setUser(u)
+    return u
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser }}>
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+export const useAuth = () => useContext(AuthContext)
+
+
+========================================================
+FILE: frontend/src/App.jsx
+========================================================
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './context/AuthContext'
+import Navbar from './components/Navbar'
+import Footer from './components/Footer'
+import Home from './pages/Home'
+import Login from './pages/Login'
+import Register from './pages/Register'
+import Dashboard from './pages/Dashboard'
+import Tournaments from './pages/Tournaments'
+import TournamentDetail from './pages/TournamentDetail'
+import Leaderboard from './pages/Leaderboard'
+import Profile from './pages/Profile'
+import AdminDashboard from './pages/AdminDashboard'
+import AdminPlayers from './pages/AdminPlayers'
+import AdminTournaments from './pages/AdminTournaments'
+import AdminMatches from './pages/AdminMatches'
+
+function PrivateRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+    <div className="spinner-border" style={{ color: 'var(--acc)' }} />
+  </div>
+  return user ? children : <Navigate to="/login" replace />
+}
+
+function AdminRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role !== 'admin') return <Navigate to="/dashboard" replace />
+  return children
+}
+
+function AppRoutes() {
+  const { user } = useAuth()
+  return (
+    <>
+      <Navbar />
+      <main style={{ minHeight: 'calc(100vh - 112px)' }}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <Login />} />
+          <Route path="/register" element={user ? <Navigate to="/dashboard" /> : <Register />} />
+          <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/tournaments" element={<Tournaments />} />
+          <Route path="/tournaments/:id" element={<TournamentDetail />} />
+          <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+          <Route path="/profile" element={<PrivateRoute><Profile /></PrivateRoute>} />
+          <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+          <Route path="/admin/players" element={<AdminRoute><AdminPlayers /></AdminRoute>} />
+          <Route path="/admin/tournaments" element={<AdminRoute><AdminTournaments /></AdminRoute>} />
+          <Route path="/admin/matches" element={<AdminRoute><AdminMatches /></AdminRoute>} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </main>
+      <Footer />
+    </>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Login.jsx
+========================================================
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+
+export default function Login() {
+  const { login } = useAuth()
+  const navigate = useNavigate()
+  const [form, setForm] = useState({ email: '', password: '' })
+  const [errors, setErrors] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [serverError, setServerError] = useState('')
+
+  const validate = () => {
+    const e = {}
+    if (!form.email.trim()) e.email = 'Email is required'
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Enter a valid email'
+    if (!form.password) e.password = 'Password is required'
+    return e
+  }
+
+  const handleSubmit = async e => {
+    e.preventDefault()
+    const e2 = validate()
+    if (Object.keys(e2).length) { setErrors(e2); return }
+    setLoading(true); setServerError('')
+    try {
+      await login(form.email, form.password)
+      navigate('/dashboard')
+    } catch (err) {
+      setServerError(err.response?.data?.message || 'Login failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
+      <div style={{ width: '100%', maxWidth: 420 }}>
+        <div className="pp-card">
+          <div className="text-center mb-4">
+            <img src="/pharaoh-logo.svg" alt="Pharaoh Padel Tour" style={{ width: 60, height: 60, marginBottom: 8 }} />
+            <h1 style={{ fontFamily: "'Barlow Condensed'", fontSize: 36, fontWeight: 800, color: 'var(--acc)', lineHeight: 1, marginBottom: 4 }}>PHARAOH PADEL TOUR</h1>
+            <p style={{ color: 'var(--txt2)', fontSize: 14 }}>Sign in to your account</p>
+          </div>
+
+          <form onSubmit={handleSubmit} noValidate>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)', fontWeight: 500 }}>Email address</label>
+              <input type="email" className="form-control pp-input" placeholder="your@email.com"
+                value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+              {errors.email && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors.email}</div>}
+            </div>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)', fontWeight: 500 }}>Password</label>
+              <input type="password" className="form-control pp-input" placeholder="••••••••"
+                value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+              {errors.password && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors.password}</div>}
+            </div>
+            {serverError && <div className="alert" style={{ background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', color: '#b91c1c', fontSize: 13, padding: '8px 12px', borderRadius: 8 }}>{serverError}</div>}
+            <button type="submit" className="btn btn-acc w-100 mt-2" disabled={loading}>
+              {loading ? <span className="spinner-border spinner-border-sm me-2" /> : null}
+              Sign In
+            </button>
+          </form>
+
+          <div className="mt-4 p-3 rounded" style={{ background: 'var(--c3)', fontSize: 12, color: 'var(--txt2)' }}>
+            <div style={{ fontWeight: 600, color: 'var(--txt)', marginBottom: 6 }}>Demo accounts:</div>
+            <div>Admin: admin@padel.com / admin</div>
+            <div>Player C: carlos@padel.com / 123</div>
+            <div>Player D: sofia@padel.com / 123</div>
+            <div>Beginner: ahmed@padel.com / 123</div>
+          </div>
+
+          <p className="text-center mt-3" style={{ fontSize: 14, color: 'var(--txt2)' }}>
+            No account? <Link to="/register" style={{ color: 'var(--acc)', textDecoration: 'none' }}>Register here</Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Register.jsx
+========================================================
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+
+export default function Register() {
+  const { register } = useAuth()
+  const navigate = useNavigate()
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
+  const [errors, setErrors] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [serverError, setServerError] = useState('')
+
+  const validate = () => {
+    const e = {}
+    if (!form.name.trim()) e.name = 'Full name is required'
+    else if (form.name.trim().length < 2) e.name = 'Name must be at least 2 characters'
+    if (!form.email.trim()) e.email = 'Email is required'
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Enter a valid email'
+    if (!form.password) e.password = 'Password is required'
+    else if (form.password.length < 3) e.password = 'Password must be at least 3 characters'
+    if (!form.confirm) e.confirm = 'Please confirm your password'
+    else if (form.password !== form.confirm) e.confirm = 'Passwords do not match'
+    return e
+  }
+
+  const handleSubmit = async e => {
+    e.preventDefault()
+    const e2 = validate()
+    if (Object.keys(e2).length) { setErrors(e2); return }
+    setLoading(true); setServerError('')
+    try {
+      await register(form.name, form.email, form.password)
+      navigate('/dashboard')
+    } catch (err) {
+      setServerError(err.response?.data?.message || 'Registration failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const field = (key, label, type = 'text', placeholder = '') => (
+    <div className="mb-3">
+      <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)', fontWeight: 500 }}>{label}</label>
+      <input type={type} className="form-control pp-input" placeholder={placeholder}
+        value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} />
+      {errors[key] && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors[key]}</div>}
+    </div>
+  )
+
+  return (
+    <div style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
+      <div style={{ width: '100%', maxWidth: 420 }}>
+        <div className="pp-card">
+          <div className="text-center mb-4">
+            <img src="/pharaoh-logo.svg" alt="Pharaoh Padel Tour" style={{ width: 60, height: 60, marginBottom: 8 }} />
+            <h1 style={{ fontFamily: "'Barlow Condensed'", fontSize: 36, fontWeight: 800, color: 'var(--acc)', lineHeight: 1, marginBottom: 4 }}>PHARAOH PADEL TOUR</h1>
+            <p style={{ color: 'var(--txt2)', fontSize: 14 }}>Create your free account</p>
+          </div>
+
+          <form onSubmit={handleSubmit} noValidate>
+            {field('name', 'Full Name', 'text', 'Your full name')}
+            {field('email', 'Email Address', 'email', 'your@email.com')}
+            {field('password', 'Password', 'password', 'Min 3 characters')}
+            {field('confirm', 'Confirm Password', 'password', 'Repeat your password')}
+
+            {serverError && <div className="alert mb-3" style={{ background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', color: '#b91c1c', fontSize: 13, padding: '8px 12px', borderRadius: 8 }}>{serverError}</div>}
+
+            <button type="submit" className="btn btn-acc w-100" disabled={loading}>
+              {loading ? <span className="spinner-border spinner-border-sm me-2" /> : null}
+              Create Account
+            </button>
+          </form>
+
+          <p className="text-center mt-3" style={{ fontSize: 14, color: 'var(--txt2)' }}>
+            Already have an account? <Link to="/login" style={{ color: 'var(--acc)', textDecoration: 'none' }}>Sign in</Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Dashboard.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import axios from 'axios'
+import { useAuth } from '../context/AuthContext'
+
+function getCategory(pts) {
+  if (pts >= 1200) return 'C'
+  if (pts >= 500) return 'D'
+  return 'Beginner'
+}
+function catClass(cat) {
+  if (cat === 'C') return 'badge-c'
+  if (cat === 'D') return 'badge-d'
+  return 'badge-beginner'
+}
+function initials(name) {
+  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+}
+
+export default function Dashboard() {
+  const { user } = useAuth()
+  const [history, setHistory] = useState([])
+  const [myRegs, setMyRegs] = useState([])
+  const [matches, setMatches] = useState([])
+
+  useEffect(() => {
+    if (!user) return
+    axios.get(`/api/users/${user.id}/history`).then(r => setHistory(r.data)).catch(() => {})
+    axios.get(`/api/registrations?player=${user.id}`).then(r => setMyRegs(r.data)).catch(() => {})
+    axios.get('/api/matches').then(r => setMatches(r.data)).catch(() => {})
+  }, [user])
+
+  if (!user) return null
+
+  const cat = getCategory(user.points)
+  const myMatches = matches.filter(m => m.player1?._id === user.id || m.player2?._id === user.id)
+  const wins = myMatches.filter(m => m.winner?._id === user.id).length
+
+  const nextCat = cat === 'Beginner' ? 'D' : cat === 'D' ? 'C' : null
+  const ptsNeeded = cat === 'Beginner' ? 500 : cat === 'D' ? 1200 : 1200
+  const pct = cat === 'C' ? 100 : cat === 'Beginner' ? Math.min(100, (user.points / 500) * 100)
+    : Math.min(100, ((user.points - 500) / 700) * 100)
+
+  return (
+    <div className="container-xl py-4">
+      {/* Hero */}
+      <div className="pp-card-acc mb-4 position-relative overflow-hidden">
+        <span className="hero-bg-text">PADEL</span>
+        <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--txt2)', marginBottom: 4 }}>Welcome back,</div>
+            <h2 style={{ fontFamily: "'Barlow Condensed'", fontSize: 'clamp(28px,5vw,42px)', fontWeight: 800, marginBottom: 8 }}>{user.name}</h2>
+            <span className={`badge ${catClass(cat)} rounded-pill px-3 py-2`} style={{ fontSize: 13, fontFamily: "'Barlow Condensed'", fontWeight: 700 }}>{cat} PLAYER</span>
+          </div>
+          <div className="text-end">
+            <div className="stat-label">Total Points</div>
+            <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 56, fontWeight: 800, color: 'var(--acc)', lineHeight: 1 }}>{(user.points || 0).toLocaleString()}</div>
+          </div>
+        </div>
+        {cat !== 'C' && (
+          <div className="mt-3">
+            <div className="d-flex justify-content-between" style={{ fontSize: 12, color: 'var(--txt2)', marginBottom: 6 }}>
+              <span>Progress to <strong style={{ color: 'var(--txt)' }}>{nextCat}</strong></span>
+              <span>{user.points} / {ptsNeeded} pts ({Math.round(pct)}%)</span>
+            </div>
+            <div className="pp-progress"><div className="pp-progress-bar" style={{ width: `${pct}%` }} /></div>
+            <div style={{ fontSize: 11, color: 'var(--txt3)', marginTop: 4 }}>{ptsNeeded - user.points} points needed</div>
+          </div>
+        )}
+        {cat === 'C' && <div style={{ marginTop: 12, fontSize: 14, color: 'var(--acc)' }}>🏆 You have reached the highest category!</div>}
+      </div>
+
+      {/* Stats row */}
+      <div className="row g-3 mb-4">
+        {[
+          ['Points', (user.points || 0).toLocaleString(), 'bi-star-fill', 'var(--acc)'],
+          ['Tournaments', myRegs.length, 'bi-trophy-fill', '#fbbf24'],
+          ['Matches Won', wins, 'bi-check-circle-fill', '#34d399'],
+          ['Win Rate', `${myMatches.length ? Math.round((wins / myMatches.length) * 100) : 0}%`, 'bi-graph-up-arrow', '#60a5fa'],
+        ].map(([label, val, icon, color]) => (
+          <div key={label} className="col-6 col-lg-3">
+            <div className="pp-card-sm h-100">
+              <div className="d-flex align-items-center gap-2 mb-2">
+                <i className={`bi ${icon}`} style={{ color, fontSize: 18 }} />
+                <span className="stat-label mb-0">{label}</span>
+              </div>
+              <div className="stat-val">{val}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="row g-3">
+        {/* Points history */}
+        <div className="col-md-6">
+          <div className="pp-card h-100">
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Points <span className="accent-text">History</span></h5>
+            {history.length ? (
+              <>
+                <div className="d-flex align-items-flex-end gap-1 mb-3" style={{ height: 80 }}>
+                  {history.slice(0, 8).reverse().map((h, i) => {
+                    const max = Math.max(...history.slice(0, 8).map(x => x.points))
+                    const pct2 = Math.round((h.points / max) * 70)
+                    return <div key={i} className="flex-fill d-flex flex-column align-items-center">
+                      <div className="pts-chart-bar" style={{ height: Math.max(8, pct2) }} title={`+${h.points}`} />
+                      <div style={{ fontSize: 9, color: 'var(--txt3)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 40, textAlign: 'center' }}>
+                        {h.tournament?.name?.split(' ')[0] || ''}
+                      </div>
+                    </div>
+                  })}
+                </div>
+                {history.slice(0, 5).map(h => (
+                  <div key={h._id} className="d-flex justify-content-between align-items-center py-2" style={{ borderBottom: '1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{h.reason}</div>
+                      <div style={{ fontSize: 11, color: 'var(--txt3)' }}>{h.date}</div>
+                    </div>
+                    <span style={{ color: 'var(--acc)', fontWeight: 700, fontFamily: "'Barlow Condensed'", fontSize: 18 }}>+{h.points}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="empty-state"><div className="icon">📊</div><p>No points earned yet</p></div>
+            )}
+          </div>
+        </div>
+
+        {/* My tournaments */}
+        <div className="col-md-6">
+          <div className="pp-card h-100">
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 0 }}>My <span className="accent-text">Tournaments</span></h5>
+              <Link to="/tournaments" className="btn btn-ghost btn-sm" style={{ fontSize: 12 }}>Browse →</Link>
+            </div>
+            {myRegs.length ? myRegs.map(r => (
+              <div key={r._id} className="d-flex justify-content-between align-items-center p-2 mb-2 rounded" style={{ background: 'var(--c3)', border: '1px solid var(--border)' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{r.tournament?.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--txt3)', marginTop: 2 }}>
+                    {r.tournament?.date} · <span className={`badge ${catClass(r.tournament?.category)} rounded-pill`} style={{ fontSize: 10 }}>{r.tournament?.category}</span>
+                  </div>
+                </div>
+                <span className={`badge badge-${r.tournament?.status} rounded-pill`} style={{ fontSize: 11, fontFamily: "'Barlow Condensed'", fontWeight: 700, textTransform: 'uppercase' }}>{r.tournament?.status}</span>
+              </div>
+            )) : (
+              <div className="empty-state"><div className="icon">🎾</div><p>Not registered in any tournament</p></div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Leaderboard.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+import { useAuth } from '../context/AuthContext'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+function initials(name) { return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) }
+
+export default function Leaderboard() {
+  const { user } = useAuth()
+  const [players, setPlayers] = useState([])
+  const [matches, setMatches] = useState([])
+  const [catFilter, setCatFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([axios.get('/api/users'), axios.get('/api/matches')])
+      .then(([ur, mr]) => { setPlayers(ur.data); setMatches(mr.data) })
+      .finally(() => setLoading(false))
+  }, [])
+
+  const filtered = catFilter === 'all' ? players : players.filter(p => getCategory(p.points) === catFilter)
+
+  const rankIcon = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`
+
+  return (
+    <div className="container-xl py-4">
+      <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 4 }}>
+        Global <span className="accent-text">Leaderboard</span>
+      </h2>
+      <p className="text-dim mb-4" style={{ fontSize: 14 }}>Rankings across all Pharaoh Padel Tour players</p>
+
+      <div className="d-flex gap-2 mb-4 flex-wrap">
+        {['all', 'Beginner', 'D', 'C'].map(c => (
+          <button key={c} onClick={() => setCatFilter(c)}
+            className={`btn btn-sm ${catFilter === c ? 'btn-acc' : 'btn-ghost'}`}
+            style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 14 }}>
+            {c === 'all' ? 'All Categories' : c}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+      ) : !filtered.length ? (
+        <div className="empty-state"><div className="icon">🏅</div><p>No players found</p></div>
+      ) : (
+        <>
+          {/* Top 3 podium */}
+          {catFilter === 'all' && filtered.length >= 3 && (
+            <div className="row g-3 mb-4 justify-content-center">
+              {[filtered[1], filtered[0], filtered[2]].map((p, podiumI) => {
+                const rank = podiumI === 1 ? 1 : podiumI === 0 ? 2 : 3
+                const height = rank === 1 ? 120 : rank === 2 ? 90 : 70
+                return (
+                  <div key={p._id} className="col-4 col-sm-3 text-center">
+                    <div className="pp-card py-3">
+                      <div className="pp-avatar mx-auto mb-2" style={{ width: 48, height: 48, fontSize: 18 }}>{initials(p.name)}</div>
+                      <div style={{ fontFamily: "'Barlow Condensed'", fontSize: rank === 1 ? 32 : 24 }}>{rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉'}</div>
+                      <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>{p.name}</div>
+                      <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 700, color: 'var(--acc)' }}>{p.points.toLocaleString()}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="pp-card">
+            <div className="table-responsive">
+              <table className="table pp-table mb-0">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Player</th>
+                    <th>Category</th>
+                    <th>Points</th>
+                    <th className="d-none d-sm-table-cell">Matches</th>
+                    <th className="d-none d-sm-table-cell">Wins</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((p, i) => {
+                    const pMatches = matches.filter(m => m.player1?._id === p._id || m.player2?._id === p._id)
+                    const wins = pMatches.filter(m => m.winner?._id === p._id).length
+                    const isMe = user && p._id === user.id
+                    return (
+                      <tr key={p._id} style={{ background: isMe ? 'rgba(26,158,92,.06)' : '' }}>
+                        <td style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 700, width: 60 }}>
+                          {typeof rankIcon(i) === 'string' && rankIcon(i).startsWith('#')
+                            ? <span style={{ color: 'var(--txt2)' }}>{rankIcon(i)}</span>
+                            : rankIcon(i)}
+                        </td>
+                        <td>
+                          <div className="d-flex align-items-center gap-2">
+                            <div className="pp-avatar" style={{ width: 32, height: 32, fontSize: 12 }}>{initials(p.name)}</div>
+                            <span style={{ fontWeight: isMe ? 600 : 400 }}>{p.name}{isMe ? ' (you)' : ''}</span>
+                          </div>
+                        </td>
+                        <td><span className={`badge ${catClass(getCategory(p.points))} rounded-pill`} style={{ fontSize: 11 }}>{getCategory(p.points)}</span></td>
+                        <td style={{ fontFamily: "'Barlow Condensed'", fontSize: 22, fontWeight: 700, color: 'var(--acc)' }}>{p.points.toLocaleString()}</td>
+                        <td className="d-none d-sm-table-cell text-dim">{pMatches.length}</td>
+                        <td className="d-none d-sm-table-cell text-dim">{wins}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Tournaments.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import axios from 'axios'
+import { useAuth } from '../context/AuthContext'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+
+export default function Tournaments() {
+  const { user } = useAuth()
+  const [tournaments, setTournaments] = useState([])
+  const [registrations, setRegistrations] = useState([])
+  const [filter, setFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [regLoading, setRegLoading] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    const [tr, rr] = await Promise.all([
+      axios.get('/api/tournaments'),
+      user ? axios.get(`/api/registrations?player=${user.id}`) : Promise.resolve({ data: [] })
+    ])
+    setTournaments(tr.data)
+    setRegistrations(rr.data)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [user])
+
+  const isRegistered = tid => registrations.some(r => r.tournament?._id === tid || r.tournament === tid)
+
+  const canRegister = t => {
+    if (!user || user.role === 'admin' || t.status !== 'upcoming' || isRegistered(t._id)) return null
+    const cat = getCategory(user.points)
+    const order = ['Beginner', 'D', 'C']
+    if (order.indexOf(cat) > order.indexOf(t.category)) return { ok: false, reason: `${cat} players cannot join ${t.category}` }
+    return { ok: true }
+  }
+
+  const handleRegister = async tid => {
+    setRegLoading(tid)
+    try {
+      await axios.post('/api/registrations', { tournamentId: tid })
+      await load()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Registration failed')
+    } finally {
+      setRegLoading(null)
+    }
+  }
+
+  const filtered = filter === 'all' ? tournaments : tournaments.filter(t => t.status === filter)
+
+  return (
+    <div className="container-xl py-4">
+      <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+        <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 0 }}>
+          <span className="accent-text">Tournaments</span>
+        </h2>
+        {user?.role === 'admin' && <Link to="/admin/tournaments" className="btn btn-acc btn-sm">+ New Tournament</Link>}
+      </div>
+
+      {/* Filter tabs */}
+      <div className="d-flex gap-2 mb-4 flex-wrap">
+        {['all', 'upcoming', 'active', 'completed'].map(s => (
+          <button key={s} onClick={() => setFilter(s)}
+            className={`btn btn-sm ${filter === s ? 'btn-acc' : 'btn-ghost'}`}
+            style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, textTransform: 'capitalize', fontSize: 14 }}>{s}</button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+      ) : !filtered.length ? (
+        <div className="empty-state"><div className="icon">🏆</div><p>No tournaments found</p></div>
+      ) : (
+        <div className="row g-3">
+          {filtered.map(t => {
+            const reg = canRegister(t)
+            const already = isRegistered(t._id)
+            return (
+              <div key={t._id} className="col-sm-6 col-xl-4">
+                <div className="pp-card h-100 d-flex flex-column">
+                  <div className="d-flex justify-content-between align-items-start mb-3">
+                    <span className={`badge ${catClass(t.category)} rounded-pill px-3 py-2`} style={{ fontSize: 12, fontFamily: "'Barlow Condensed'", fontWeight: 700 }}>{t.category}</span>
+                    <span className={`badge badge-${t.status} rounded-pill px-3 py-1`} style={{ fontSize: 11 }}>{t.status}</span>
+                  </div>
+                  <h4 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 24, flex: 1 }}>{t.name}</h4>
+                  <div style={{ color: 'var(--txt2)', fontSize: 13, marginBottom: 4 }}><i className="bi bi-calendar3 me-2" />{t.date}</div>
+                  <div className="d-flex gap-2 mt-3">
+                    <Link to={`/tournaments/${t._id}`} className="btn btn-ghost btn-sm flex-fill">View Details</Link>
+                    {already ? (
+                      <span className="btn btn-sm flex-fill" style={{ background: 'rgba(26,158,92,.08)', border: '1px solid rgba(26,158,92,.2)', color: 'var(--acc2)', pointerEvents: 'none' }}>✓ Registered</span>
+                    ) : reg ? (
+                      <button
+                        className={`btn btn-sm flex-fill ${reg.ok ? 'btn-acc' : 'btn-ghost'}`}
+                        disabled={!reg.ok || regLoading === t._id}
+                        onClick={() => reg.ok && handleRegister(t._id)}
+                        title={!reg.ok ? reg.reason : ''}
+                      >
+                        {regLoading === t._id ? <span className="spinner-border spinner-border-sm" /> : reg.ok ? 'Register' : 'Ineligible'}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/TournamentDetail.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import { useParams, Link } from 'react-router-dom'
+import axios from 'axios'
+import { useAuth } from '../context/AuthContext'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+function initials(name) { return name ? name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '?' }
+
+const POINTS = { Beginner: { winner: 300, finalist: 200, semi: 120, quarter: 60 }, D: { winner: 600, finalist: 400, semi: 240, quarter: 120 }, C: { winner: 1000, finalist: 600, semi: 360, quarter: 180 } }
+
+export default function TournamentDetail() {
+  const { id } = useParams()
+  const { user } = useAuth()
+  const [tournament, setTournament] = useState(null)
+  const [players, setPlayers] = useState([])
+  const [matches, setMatches] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [isReg, setIsReg] = useState(false)
+  const [myRegId, setMyRegId] = useState(null)
+  const [regLoading, setRegLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [tr, mr, rr] = await Promise.all([
+        axios.get(`/api/tournaments/${id}`),
+        axios.get(`/api/matches?tournament=${id}`),
+        axios.get(`/api/registrations?tournament=${id}`)
+      ])
+      setTournament(tr.data)
+      setMatches(mr.data)
+      setPlayers(rr.data.map(r => r.player).filter(Boolean))
+      if (user) {
+        const myReg = rr.data.find(r => r.player?._id === user.id)
+        setIsReg(!!myReg)
+        setMyRegId(myReg?._id || null)
+      }
+    } catch {}
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [id, user])
+
+  const handleRegister = async () => {
+    setRegLoading(true)
+    try {
+      await axios.post('/api/registrations', { tournamentId: id })
+      await load()
+    } catch (err) { alert(err.response?.data?.message || 'Registration failed') }
+    setRegLoading(false)
+  }
+
+  const handleCancel = async () => {
+    if (!window.confirm('Are you sure you want to cancel your registration?')) return
+    setRegLoading(true)
+    try {
+      await axios.delete(`/api/registrations/${myRegId}`)
+      await load()
+    } catch (err) { alert(err.response?.data?.message || 'Could not cancel registration') }
+    setRegLoading(false)
+  }
+
+  if (loading) return <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+  if (!tournament) return <div className="container py-5 text-center text-dim">Tournament not found</div>
+
+  const pts = POINTS[tournament.category] || {}
+
+  return (
+    <div className="container-xl py-4">
+      <Link to="/tournaments" className="btn btn-ghost btn-sm mb-3"><i className="bi bi-arrow-left me-2" />Back to Tournaments</Link>
+
+      <div className="row g-4">
+        <div className="col-lg-8">
+          {/* Header */}
+          <div className="pp-card mb-4">
+            <div className="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-3">
+              <div>
+                <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 36, marginBottom: 8 }}>{tournament.name}</h2>
+                <div className="d-flex gap-2 align-items-center flex-wrap">
+                  <span className={`badge ${catClass(tournament.category)} rounded-pill px-3 py-2`} style={{ fontSize: 13 }}>{tournament.category}</span>
+                  <span className={`badge badge-${tournament.status} rounded-pill px-3 py-1`} style={{ fontSize: 12 }}>{tournament.status}</span>
+                  <span style={{ fontSize: 13, color: 'var(--txt2)' }}><i className="bi bi-calendar3 me-1" />{tournament.date}</span>
+                </div>
+              </div>
+              {user && user.role !== 'admin' && tournament.status === 'upcoming' && (
+                isReg
+                  ? <button className="btn btn-sm" style={{ background: 'rgba(220,53,69,.08)', border: '1px solid rgba(220,53,69,.25)', color: '#dc3545' }} onClick={handleCancel} disabled={regLoading}>
+                      {regLoading ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="bi bi-x-circle me-1" />}
+                      Cancel Registration
+                    </button>
+                  : <button className="btn btn-acc btn-sm" onClick={handleRegister} disabled={regLoading}>
+                      {regLoading ? <span className="spinner-border spinner-border-sm me-1" /> : null} Register
+                    </button>
+              )}
+            </div>
+
+            {/* Stats */}
+            <div className="row g-3">
+              {[['Players', players.length, 'bi-people-fill', '#60a5fa'], ['Matches', matches.length, 'bi-trophy-fill', '#fbbf24']].map(([l, v, i, c]) => (
+                <div key={l} className="col-6 col-sm-3">
+                  <div className="pp-card-sm text-center py-3">
+                    <i className={`bi ${i} mb-2 d-block`} style={{ fontSize: 22, color: c }} />
+                    <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 28, fontWeight: 700, color: 'var(--txt)' }}>{v}</div>
+                    <div style={{ fontSize: 12, color: 'var(--txt3)' }}>{l}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Match Results */}
+          <div className="pp-card">
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Bracket / <span className="accent-text">Results</span></h5>
+            {['quarter', 'semi', 'final'].map(round => {
+              const roundMatches = matches.filter(m => m.round === round)
+              if (!roundMatches.length) return null
+              const label = round === 'quarter' ? 'Quarter-finals' : round === 'semi' ? 'Semi-finals' : 'Final'
+              return (
+                <div key={round} className="mb-4">
+                  <div style={{ fontSize: 13, color: 'var(--txt3)', fontFamily: "'Barlow Condensed'", fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>{label}</div>
+                  {roundMatches.map(m => (
+                    <div key={m._id} className="mb-2 rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                      {[{ p: m.player1, w: m.winner?._id === m.player1?._id }, { p: m.player2, w: m.winner?._id === m.player2?._id }].map(({ p, w }, i) => (
+                        <div key={i} className="d-flex justify-content-between align-items-center px-3 py-2" style={{
+                          background: w ? 'rgba(26,158,92,.07)' : 'transparent',
+                          borderBottom: i === 0 ? '1px solid var(--border)' : 'none',
+                          color: w ? 'var(--acc)' : 'var(--txt2)'
+                        }}>
+                          <div className="d-flex align-items-center gap-2">
+                            <div className="pp-avatar" style={{ width: 26, height: 26, fontSize: 10 }}>{initials(p?.name)}</div>
+                            <span style={{ fontSize: 13, fontWeight: w ? 600 : 400 }}>{p?.name || 'TBD'}</span>
+                          </div>
+                          {w && <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 16 }}>W</span>}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+            {!matches.length && <div className="empty-state"><div className="icon">🎾</div><p>No matches recorded yet</p></div>}
+          </div>
+        </div>
+
+        <div className="col-lg-4">
+          {/* Prize Points */}
+          <div className="pp-card mb-4">
+            <h6 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, color: 'var(--txt2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.06em', fontSize: 13 }}>Prize Points</h6>
+            {Object.entries({ Winner: pts.winner, Finalist: pts.finalist, 'Semi-final': pts.semi, 'Quarter-final': pts.quarter }).map(([k, v]) => (
+              <div key={k} className="d-flex justify-content-between align-items-center py-2" style={{ borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+                <span style={{ color: 'var(--txt2)' }}>{k}</span>
+                <span style={{ color: 'var(--acc)', fontWeight: 700, fontFamily: "'Barlow Condensed'", fontSize: 18 }}>+{v}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Registered Players */}
+          <div className="pp-card">
+            <h6 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, color: 'var(--txt2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.06em', fontSize: 13 }}>
+              Registered Players ({players.length})
+            </h6>
+            {players.length ? players.map(p => (
+              <div key={p._id} className="d-flex align-items-center gap-2 py-2" style={{ borderBottom: '1px solid var(--border)' }}>
+                <div className="pp-avatar" style={{ width: 28, height: 28, fontSize: 11 }}>{initials(p.name)}</div>
+                <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{p.name}</span>
+                <span className={`badge ${catClass(getCategory(p.points))} rounded-pill`} style={{ fontSize: 10 }}>{getCategory(p.points)}</span>
+                <span style={{ fontSize: 12, color: 'var(--acc)', fontFamily: "'Barlow Condensed'", fontWeight: 700 }}>{p.points} pts</span>
+              </div>
+            )) : <div style={{ fontSize: 13, color: 'var(--txt3)' }}>No players registered yet</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/Profile.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+import { useAuth } from '../context/AuthContext'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+function initials(name) { return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) }
+
+export default function Profile() {
+  const { user, refreshUser } = useAuth()
+  const [history, setHistory] = useState([])
+  const [matches, setMatches] = useState([])
+  const [allUsers, setAllUsers] = useState([])
+  const [form, setForm] = useState({ name: '', email: '', password: '' })
+  const [errors, setErrors] = useState({})
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    if (!user) return
+    setForm({ name: user.name, email: user.email, password: '' })
+    axios.get(`/api/users/${user.id}/history`).then(r => setHistory(r.data)).catch(() => {})
+    axios.get('/api/matches').then(r => setMatches(r.data)).catch(() => {})
+    axios.get('/api/users').then(r => setAllUsers(r.data)).catch(() => {})
+  }, [user])
+
+  if (!user) return null
+  if (user.role === 'admin') return <div className="container py-5 empty-state"><div className="icon">👤</div><p>Admin accounts do not have player profiles</p></div>
+
+  const cat = getCategory(user.points)
+  const myMatches = matches.filter(m => m.player1?._id === user.id || m.player2?._id === user.id)
+  const wins = myMatches.filter(m => m.winner?._id === user.id).length
+  const rank = allUsers.sort((a, b) => b.points - a.points).findIndex(p => p._id === user.id) + 1
+
+  const validate = () => {
+    const e = {}
+    if (!form.name.trim()) e.name = 'Name is required'
+    if (!form.email.trim()) e.email = 'Email is required'
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Enter a valid email'
+    if (form.password && form.password.length < 3) e.password = 'Password must be at least 3 characters'
+    return e
+  }
+
+  const handleSave = async e => {
+    e.preventDefault()
+    const e2 = validate()
+    if (Object.keys(e2).length) { setErrors(e2); return }
+    setSaving(true)
+    try {
+      await axios.put('/api/users/me', form)
+      await refreshUser()
+      setSaved(true); setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setErrors({ server: err.response?.data?.message || 'Update failed' })
+    } finally { setSaving(false) }
+  }
+
+  const nextCat = cat === 'Beginner' ? 'D' : cat === 'D' ? 'C' : null
+  const ptsNeeded = cat === 'Beginner' ? 500 : 1200
+  const pct = cat === 'C' ? 100 : cat === 'Beginner' ? Math.min(100, (user.points / 500) * 100) : Math.min(100, ((user.points - 500) / 700) * 100)
+
+  return (
+    <div className="container-xl py-4">
+      <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 24 }}>My <span className="accent-text">Profile</span></h2>
+
+      <div className="row g-4 mb-4">
+        {/* Profile card */}
+        <div className="col-md-6">
+          <div className="pp-card-acc h-100">
+            <div className="d-flex align-items-center gap-3 mb-3">
+              <div className="pp-avatar" style={{ width: 60, height: 60, fontSize: 22 }}>{initials(user.name)}</div>
+              <div>
+                <h4 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 28, marginBottom: 4 }}>{user.name}</h4>
+                <span className={`badge ${catClass(cat)} rounded-pill px-3 py-2`} style={{ fontSize: 13 }}>{cat}</span>
+              </div>
+            </div>
+            <hr style={{ borderColor: 'var(--border)' }} />
+            <div className="row g-3 mt-1">
+              {[['Total Points', (user.points || 0).toLocaleString(), 'accent-text'], ['Global Rank', `#${rank}`, ''], ['Matches', myMatches.length, ''], ['Win Rate', `${myMatches.length ? Math.round((wins / myMatches.length) * 100) : 0}%`, '']].map(([l, v, cls]) => (
+                <div key={l} className="col-6">
+                  <div className="stat-label">{l}</div>
+                  <div className={`stat-val ${cls}`}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {cat !== 'C' && (
+              <div className="mt-3">
+                <div className="d-flex justify-content-between" style={{ fontSize: 12, color: 'var(--txt2)', marginBottom: 4 }}>
+                  <span>Progress to <strong>{nextCat}</strong></span>
+                  <span>{Math.round(pct)}%</span>
+                </div>
+                <div className="pp-progress"><div className="pp-progress-bar" style={{ width: `${pct}%` }} /></div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Edit form */}
+        <div className="col-md-6">
+          <div className="pp-card h-100">
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Update <span className="accent-text">Profile</span></h5>
+            <form onSubmit={handleSave} noValidate>
+              <div className="mb-3">
+                <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Display Name</label>
+                <input className="form-control pp-input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+                {errors.name && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors.name}</div>}
+              </div>
+              <div className="mb-3">
+                <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Email Address</label>
+                <input className="form-control pp-input" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+                {errors.email && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors.email}</div>}
+              </div>
+              <div className="mb-3">
+                <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>New Password <span style={{ color: 'var(--txt3)' }}>(leave blank to keep current)</span></label>
+                <input type="password" className="form-control pp-input" placeholder="Min 3 characters" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+                {errors.password && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{errors.password}</div>}
+              </div>
+              {errors.server && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{errors.server}</div>}
+              <button type="submit" className="btn btn-acc btn-sm" disabled={saving}>
+                {saving ? <span className="spinner-border spinner-border-sm me-2" /> : null}
+                {saved ? '✓ Saved!' : 'Save Changes'}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {/* Points history table */}
+      <div className="pp-card">
+        <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Points <span className="accent-text">History</span></h5>
+        {history.length ? (
+          <div className="table-responsive">
+            <table className="table pp-table mb-0">
+              <thead><tr><th>Date</th><th>Event</th><th>Points</th></tr></thead>
+              <tbody>
+                {history.map(h => (
+                  <tr key={h._id}>
+                    <td style={{ color: 'var(--txt2)', fontSize: 13 }}>{h.date}</td>
+                    <td style={{ fontSize: 13 }}>{h.reason}</td>
+                    <td style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 700, color: 'var(--acc)' }}>+{h.points}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state"><div className="icon">📊</div><p>No points history yet. Join a tournament to get started!</p></div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/AdminDashboard.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import axios from 'axios'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+
+export default function AdminDashboard() {
+  const [players, setPlayers] = useState([])
+  const [tournaments, setTournaments] = useState([])
+  const [matches, setMatches] = useState([])
+  const [history, setHistory] = useState([])
+
+  useEffect(() => {
+    axios.get('/api/users').then(r => setPlayers(r.data))
+    axios.get('/api/tournaments').then(r => setTournaments(r.data))
+    axios.get('/api/matches').then(r => setMatches(r.data))
+    axios.get('/api/users/me').then(() => {}).catch(() => {})
+    // load some history via registrations
+  }, [])
+
+  const cats = ['Beginner', 'D', 'C'].map(c => ({
+    cat: c, count: players.filter(p => getCategory(p.points) === c).length
+  }))
+  const totalPts = players.reduce((s, p) => s + p.points, 0)
+
+  const adminLinks = [
+    { to: '/admin/players', label: 'Manage Players', icon: 'bi-people-fill', color: '#60a5fa', desc: 'View all players, award points manually' },
+    { to: '/admin/tournaments', label: 'Manage Tournaments', icon: 'bi-trophy-fill', color: '#fbbf24', desc: 'Create tournaments, update status, complete with points' },
+    { to: '/admin/matches', label: 'Manage Matches', icon: 'bi-journal-text', color: '#34d399', desc: 'View all match results across tournaments' },
+  ]
+
+  return (
+    <div className="container-xl py-4">
+      <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 4 }}>
+        Admin <span className="accent-text">Dashboard</span>
+      </h2>
+      <p className="text-dim mb-4">Platform overview and management tools</p>
+
+      {/* Stats */}
+      <div className="row g-3 mb-4">
+        {[
+          ['Players', players.length, 'bi-people-fill', '#60a5fa'],
+          ['Tournaments', tournaments.length, 'bi-trophy-fill', '#fbbf24'],
+          ['Matches', matches.length, 'bi-journal-text', '#34d399'],
+          ['Total Points Awarded', totalPts.toLocaleString(), 'bi-star-fill', 'var(--acc)'],
+        ].map(([l, v, i, c]) => (
+          <div key={l} className="col-6 col-lg-3">
+            <div className="pp-card-sm">
+              <div className="d-flex align-items-center gap-2 mb-2">
+                <i className={`bi ${i}`} style={{ color: c, fontSize: 20 }} />
+                <span className="stat-label mb-0">{l}</span>
+              </div>
+              <div className="stat-val">{v}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="row g-3 mb-4">
+        {/* Category breakdown */}
+        <div className="col-md-6">
+          <div className="pp-card h-100">
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Category <span className="accent-text">Breakdown</span></h5>
+            {cats.map(({ cat, count }) => {
+              const pct = players.length ? Math.round((count / players.length) * 100) : 0
+              return (
+                <div key={cat} className="mb-3">
+                  <div className="d-flex justify-content-between align-items-center mb-1">
+                    <span className={`badge ${catClass(cat)} rounded-pill px-3 py-2`} style={{ fontSize: 12 }}>{cat}</span>
+                    <span style={{ fontSize: 13, color: 'var(--txt2)' }}>{count} players ({pct}%)</span>
+                  </div>
+                  <div className="pp-progress"><div className="pp-progress-bar" style={{ width: `${pct}%` }} /></div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Quick actions */}
+        <div className="col-md-6">
+          <div className="pp-card h-100">
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Quick <span className="accent-text">Actions</span></h5>
+            {adminLinks.map(({ to, label, icon, color, desc }) => (
+              <Link key={to} to={to} style={{ textDecoration: 'none' }}>
+                <div className="d-flex align-items-center gap-3 p-2 mb-2 rounded" style={{ background: 'var(--c3)', border: '1px solid var(--border)', transition: '.2s', cursor: 'pointer' }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 8, background: `${color}20`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <i className={`bi ${icon}`} style={{ color, fontSize: 18 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--txt)' }}>{label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--txt3)' }}>{desc}</div>
+                  </div>
+                  <i className="bi bi-chevron-right ms-auto" style={{ color: 'var(--txt3)' }} />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Recent tournaments */}
+      <div className="pp-card">
+        <div className="d-flex justify-content-between align-items-center mb-3">
+          <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 0 }}>Recent <span className="accent-text">Tournaments</span></h5>
+          <Link to="/admin/tournaments" className="btn btn-ghost btn-sm" style={{ fontSize: 12 }}>Manage →</Link>
+        </div>
+        {tournaments.length ? (
+          <div className="table-responsive">
+            <table className="table pp-table mb-0">
+              <thead><tr><th>Name</th><th>Category</th><th>Date</th><th>Status</th></tr></thead>
+              <tbody>
+                {tournaments.slice(0, 5).map(t => (
+                  <tr key={t._id}>
+                    <td style={{ fontWeight: 600 }}>{t.name}</td>
+                    <td><span className={`badge ${catClass(t.category)} rounded-pill`} style={{ fontSize: 11 }}>{t.category}</span></td>
+                    <td style={{ color: 'var(--txt2)', fontSize: 13 }}>{t.date}</td>
+                    <td><span className={`badge badge-${t.status} rounded-pill`} style={{ fontSize: 11 }}>{t.status}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="empty-state"><div className="icon">🏆</div><p>No tournaments yet</p></div>}
+      </div>
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/AdminTournaments.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+
+export default function AdminTournaments() {
+  const [tournaments, setTournaments] = useState([])
+  const [registrations, setRegistrations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ name: '', category: 'Beginner', date: '' })
+  const [formErrors, setFormErrors] = useState({})
+  const [creating, setCreating] = useState(false)
+  const [actionLoading, setActionLoading] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    const [tr, rr] = await Promise.all([axios.get('/api/tournaments'), axios.get('/api/registrations')])
+    setTournaments(tr.data)
+    setRegistrations(rr.data)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const validateForm = () => {
+    const e = {}
+    if (!form.name.trim()) e.name = 'Tournament name is required'
+    if (!form.date) e.date = 'Date is required'
+    return e
+  }
+
+  const handleCreate = async () => {
+    const e2 = validateForm()
+    if (Object.keys(e2).length) { setFormErrors(e2); return }
+    setCreating(true)
+    try {
+      await axios.post('/api/tournaments', form)
+      setShowCreate(false); setForm({ name: '', category: 'Beginner', date: '' })
+      await load()
+    } catch (err) {
+      setFormErrors({ server: err.response?.data?.message || 'Creation failed' })
+    } finally { setCreating(false) }
+  }
+
+  const updateStatus = async (id, status) => {
+    setActionLoading(id + status)
+    try {
+      await axios.put(`/api/tournaments/${id}/status`, { status })
+      await load()
+    } catch {} finally { setActionLoading(null) }
+  }
+
+  const completeTournament = async id => {
+    if (!window.confirm('Complete this tournament and award points to all match winners?')) return
+    setActionLoading(id + 'complete')
+    try {
+      await axios.post(`/api/tournaments/${id}/complete`)
+      await load()
+    } catch (err) { alert(err.response?.data?.message || 'Error') } finally { setActionLoading(null) }
+  }
+
+  return (
+    <div className="container-xl py-4">
+      <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+        <div>
+          <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 4 }}>
+            Admin — <span className="accent-text">Tournaments</span>
+          </h2>
+          <p className="text-dim mb-0">Create and manage tournaments</p>
+        </div>
+        <button className="btn btn-acc" onClick={() => setShowCreate(true)}><i className="bi bi-plus-lg me-2" />New Tournament</button>
+      </div>
+
+      {/* Create Tournament Modal */}
+      {showCreate && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 1050, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          onClick={() => setShowCreate(false)}>
+          <div className="pp-card" style={{ maxWidth: 440, width: '100%' }} onClick={e => e.stopPropagation()}>
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Create New Tournament</h5>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Tournament Name</label>
+              <input className="form-control pp-input" placeholder="e.g. Summer Open"
+                value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+              {formErrors.name && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.name}</div>}
+            </div>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Category</label>
+              <select className="form-select pp-select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                <option value="Beginner">Beginner</option>
+                <option value="D">D</option>
+                <option value="C">C</option>
+              </select>
+            </div>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Date</label>
+              <input type="date" className="form-control pp-input"
+                value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+              {formErrors.date && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.date}</div>}
+            </div>
+            {formErrors.server && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{formErrors.server}</div>}
+            <div className="d-flex gap-2">
+              <button className="btn btn-ghost flex-fill" onClick={() => setShowCreate(false)}>Cancel</button>
+              <button className="btn btn-acc flex-fill" onClick={handleCreate} disabled={creating}>
+                {creating ? <span className="spinner-border spinner-border-sm me-2" /> : null}Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+      ) : (
+        <div className="pp-card">
+          <div className="table-responsive">
+            <table className="table pp-table mb-0">
+              <thead>
+                <tr><th>Name</th><th>Category</th><th>Date</th><th>Status</th><th>Players</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {tournaments.map(t => {
+                  const regCount = registrations.filter(r => r.tournament?._id === t._id).length
+                  return (
+                    <tr key={t._id}>
+                      <td style={{ fontWeight: 600 }}>{t.name}</td>
+                      <td><span className={`badge ${catClass(t.category)} rounded-pill`} style={{ fontSize: 11 }}>{t.category}</span></td>
+                      <td style={{ color: 'var(--txt2)', fontSize: 13 }}>{t.date}</td>
+                      <td><span className={`badge badge-${t.status} rounded-pill`} style={{ fontSize: 11 }}>{t.status}</span></td>
+                      <td style={{ color: 'var(--txt2)' }}>{regCount}</td>
+                      <td>
+                        <div className="d-flex gap-1 flex-wrap">
+                          {t.status === 'upcoming' && (
+                            <button className="btn btn-sm" style={{ background: 'rgba(245,158,11,.15)', border: '1px solid rgba(245,158,11,.3)', color: '#fbbf24', fontSize: 11 }}
+                              disabled={actionLoading === t._id + 'active'} onClick={() => updateStatus(t._id, 'active')}>
+                              Start
+                            </button>
+                          )}
+                          {t.status === 'active' && (
+                            <button className="btn btn-sm" style={{ background: 'rgba(26,158,92,.1)', border: '1px solid rgba(26,158,92,.2)', color: 'var(--acc2)', fontSize: 11 }}
+                              disabled={actionLoading === t._id + 'complete'} onClick={() => completeTournament(t._id)}>
+                              {actionLoading === t._id + 'complete' ? <span className="spinner-border spinner-border-sm" /> : 'Complete & Award'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/AdminMatches.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+function initials(name) { return name ? name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '?' }
+
+export default function AdminMatches() {
+  const [matches, setMatches] = useState([])
+  const [tournaments, setTournaments] = useState([])
+  const [registrations, setRegistrations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [form, setForm] = useState({ tournament: '', player1: '', player2: '', winner: '', round: 'quarter' })
+  const [formErrors, setFormErrors] = useState({})
+  const [adding, setAdding] = useState(false)
+  const [tournamentFilter, setTournamentFilter] = useState('all')
+
+  const load = async () => {
+    setLoading(true)
+    const [mr, tr, rr] = await Promise.all([
+      axios.get('/api/matches'),
+      axios.get('/api/tournaments'),
+      axios.get('/api/registrations')
+    ])
+    setMatches(mr.data)
+    setTournaments(tr.data)
+    setRegistrations(rr.data)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const playersForTournament = tid => {
+    return registrations.filter(r => r.tournament?._id === tid || r.tournament === tid).map(r => r.player).filter(Boolean)
+  }
+
+  const validateForm = () => {
+    const e = {}
+    if (!form.tournament) e.tournament = 'Select a tournament'
+    if (!form.player1) e.player1 = 'Select player 1'
+    if (!form.player2) e.player2 = 'Select player 2'
+    else if (form.player1 === form.player2) e.player2 = 'Players must be different'
+    if (!form.winner) e.winner = 'Select a winner'
+    return e
+  }
+
+  const handleAdd = async () => {
+    const e2 = validateForm()
+    if (Object.keys(e2).length) { setFormErrors(e2); return }
+    setAdding(true)
+    try {
+      await axios.post('/api/matches', form)
+      setShowAdd(false); setForm({ tournament: '', player1: '', player2: '', winner: '', round: 'quarter' })
+      await load()
+    } catch (err) {
+      setFormErrors({ server: err.response?.data?.message || 'Failed to add match' })
+    } finally { setAdding(false) }
+  }
+
+  const filteredMatches = tournamentFilter === 'all'
+    ? matches
+    : matches.filter(m => m.tournament?._id === tournamentFilter)
+
+  const roundLabel = r => r === 'quarter' ? 'Quarter-final' : r === 'semi' ? 'Semi-final' : 'Final'
+  const roundCls = r => r === 'final' ? 'rgba(26,158,92,.12)' : r === 'semi' ? 'rgba(245,158,11,.15)' : 'rgba(59,130,246,.15)'
+  const roundCol = r => r === 'final' ? 'var(--acc)' : r === 'semi' ? '#fbbf24' : '#60a5fa'
+
+  const currentPlayers = form.tournament ? playersForTournament(form.tournament) : []
+
+  return (
+    <div className="container-xl py-4">
+      <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+        <div>
+          <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 4 }}>
+            Admin — <span className="accent-text">Matches</span>
+          </h2>
+          <p className="text-dim mb-0">Record and view all match results</p>
+        </div>
+        <button className="btn btn-acc" onClick={() => setShowAdd(true)}><i className="bi bi-plus-lg me-2" />Add Match Result</button>
+      </div>
+
+      {/* Filter by tournament */}
+      <div className="pp-card mb-3">
+        <select className="form-select pp-select" value={tournamentFilter} onChange={e => setTournamentFilter(e.target.value)}>
+          <option value="all">All Tournaments</option>
+          {tournaments.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+        </select>
+      </div>
+
+      {/* Add Match Modal */}
+      {showAdd && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 1050, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          onClick={() => setShowAdd(false)}>
+          <div className="pp-card" style={{ maxWidth: 480, width: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Add Match Result</h5>
+
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Tournament</label>
+              <select className="form-select pp-select" value={form.tournament}
+                onChange={e => setForm({ ...form, tournament: e.target.value, player1: '', player2: '', winner: '' })}>
+                <option value="">Select tournament...</option>
+                {tournaments.filter(t => t.status === 'active').map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+              </select>
+              {formErrors.tournament && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.tournament}</div>}
+            </div>
+
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Round</label>
+              <select className="form-select pp-select" value={form.round} onChange={e => setForm({ ...form, round: e.target.value })}>
+                <option value="quarter">Quarter-final</option>
+                <option value="semi">Semi-final</option>
+                <option value="final">Final</option>
+              </select>
+            </div>
+
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Player 1</label>
+              <select className="form-select pp-select" value={form.player1}
+                onChange={e => setForm({ ...form, player1: e.target.value, winner: '' })}>
+                <option value="">Select player...</option>
+                {currentPlayers.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+              </select>
+              {formErrors.player1 && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.player1}</div>}
+            </div>
+
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Player 2</label>
+              <select className="form-select pp-select" value={form.player2}
+                onChange={e => setForm({ ...form, player2: e.target.value, winner: '' })}>
+                <option value="">Select player...</option>
+                {currentPlayers.filter(p => p._id !== form.player1).map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+              </select>
+              {formErrors.player2 && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.player2}</div>}
+            </div>
+
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Winner</label>
+              <select className="form-select pp-select" value={form.winner} onChange={e => setForm({ ...form, winner: e.target.value })}>
+                <option value="">Select winner...</option>
+                {[form.player1, form.player2].filter(Boolean).map(pid => {
+                  const p = currentPlayers.find(x => x._id === pid)
+                  return p ? <option key={pid} value={pid}>{p.name}</option> : null
+                })}
+              </select>
+              {formErrors.winner && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{formErrors.winner}</div>}
+            </div>
+
+            {formErrors.server && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{formErrors.server}</div>}
+            <div className="d-flex gap-2">
+              <button className="btn btn-ghost flex-fill" onClick={() => setShowAdd(false)}>Cancel</button>
+              <button className="btn btn-acc flex-fill" onClick={handleAdd} disabled={adding}>
+                {adding ? <span className="spinner-border spinner-border-sm me-2" /> : null}Save Match
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+      ) : !filteredMatches.length ? (
+        <div className="empty-state"><div className="icon">🎾</div><p>No matches recorded</p></div>
+      ) : (
+        <div className="pp-card">
+          <div className="table-responsive">
+            <table className="table pp-table mb-0">
+              <thead>
+                <tr><th>Tournament</th><th>Round</th><th>Player 1</th><th>Player 2</th><th>Winner</th></tr>
+              </thead>
+              <tbody>
+                {filteredMatches.map(m => (
+                  <tr key={m._id}>
+                    <td style={{ fontWeight: 500, fontSize: 13 }}>
+                      {m.tournament?.name}
+                      {m.tournament?.category && <span className={`badge ${catClass(m.tournament.category)} rounded-pill ms-2`} style={{ fontSize: 10 }}>{m.tournament.category}</span>}
+                    </td>
+                    <td>
+                      <span className="rounded-pill px-2 py-1" style={{ fontSize: 11, fontWeight: 700, background: roundCls(m.round), color: roundCol(m.round) }}>
+                        {roundLabel(m.round)}
+                      </span>
+                    </td>
+                    <td style={{ color: m.winner?._id === m.player1?._id ? 'var(--acc)' : 'var(--txt2)', fontWeight: m.winner?._id === m.player1?._id ? 600 : 400, fontSize: 13 }}>
+                      <div className="d-flex align-items-center gap-2">
+                        <div className="pp-avatar" style={{ width: 24, height: 24, fontSize: 9 }}>{initials(m.player1?.name)}</div>
+                        {m.player1?.name}
+                        {m.winner?._id === m.player1?._id && <i className="bi bi-trophy-fill" style={{ color: '#fbbf24', fontSize: 12 }} />}
+                      </div>
+                    </td>
+                    <td style={{ color: m.winner?._id === m.player2?._id ? 'var(--acc)' : 'var(--txt2)', fontWeight: m.winner?._id === m.player2?._id ? 600 : 400, fontSize: 13 }}>
+                      <div className="d-flex align-items-center gap-2">
+                        <div className="pp-avatar" style={{ width: 24, height: 24, fontSize: 9 }}>{initials(m.player2?.name)}</div>
+                        {m.player2?.name}
+                        {m.winner?._id === m.player2?._id && <i className="bi bi-trophy-fill" style={{ color: '#fbbf24', fontSize: 12 }} />}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="d-flex align-items-center gap-2">
+                        <div className="pp-avatar" style={{ width: 26, height: 26, fontSize: 10 }}>{initials(m.winner?.name)}</div>
+                        <span style={{ color: 'var(--acc)', fontWeight: 600, fontSize: 13 }}>{m.winner?.name}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+========================================================
+FILE: frontend/src/pages/AdminPlayers.jsx
+========================================================
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+
+function getCategory(pts) { if (pts >= 1200) return 'C'; if (pts >= 500) return 'D'; return 'Beginner' }
+function catClass(cat) { if (cat === 'C') return 'badge-c'; if (cat === 'D') return 'badge-d'; return 'badge-beginner' }
+function initials(name) { return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) }
+
+export default function AdminPlayers() {
+  const [players, setPlayers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [awardForm, setAwardForm] = useState({ points: '', reason: '' })
+  const [awardErrors, setAwardErrors] = useState({})
+  const [awarding, setAwarding] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    const r = await axios.get('/api/users')
+    setPlayers(r.data)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const filtered = players.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    p.email.toLowerCase().includes(search.toLowerCase())
+  )
+
+  const openAward = p => { setSelected(p); setAwardForm({ points: '', reason: '' }); setAwardErrors({}); setShowModal(true) }
+
+  const validateAward = () => {
+    const e = {}
+    if (!awardForm.points || isNaN(awardForm.points) || Number(awardForm.points) <= 0) e.points = 'Enter a valid positive number'
+    if (!awardForm.reason.trim()) e.reason = 'Reason is required'
+    return e
+  }
+
+  const handleAward = async () => {
+    const e2 = validateAward()
+    if (Object.keys(e2).length) { setAwardErrors(e2); return }
+    setAwarding(true)
+    try {
+      await axios.post(`/api/users/${selected._id}/award`, { points: Number(awardForm.points), reason: awardForm.reason })
+      setShowModal(false)
+      await load()
+    } catch (err) {
+      setAwardErrors({ server: err.response?.data?.message || 'Failed to award points' })
+    } finally { setAwarding(false) }
+  }
+
+  return (
+    <div className="container-xl py-4">
+      <h2 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 38, marginBottom: 4 }}>
+        Admin — <span className="accent-text">Players</span>
+      </h2>
+      <p className="text-dim mb-4">Manage all registered players and award points manually</p>
+
+      <div className="pp-card mb-3">
+        <input className="form-control pp-input" placeholder="🔍  Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+
+      {loading ? (
+        <div className="text-center py-5"><div className="spinner-border" style={{ color: 'var(--acc)' }} /></div>
+      ) : (
+        <div className="pp-card">
+          <div className="table-responsive">
+            <table className="table pp-table mb-0">
+              <thead>
+                <tr><th>Player</th><th>Email</th><th>Category</th><th>Points</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {filtered.map(p => (
+                  <tr key={p._id}>
+                    <td>
+                      <div className="d-flex align-items-center gap-2">
+                        <div className="pp-avatar" style={{ width: 32, height: 32, fontSize: 12 }}>{initials(p.name)}</div>
+                        <span style={{ fontWeight: 500 }}>{p.name}</span>
+                      </div>
+                    </td>
+                    <td style={{ color: 'var(--txt2)', fontSize: 13 }}>{p.email}</td>
+                    <td><span className={`badge ${catClass(getCategory(p.points))} rounded-pill`} style={{ fontSize: 11 }}>{getCategory(p.points)}</span></td>
+                    <td style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 700, color: 'var(--acc)' }}>{p.points}</td>
+                    <td>
+                      <button className="btn btn-sm" style={{ background: 'rgba(59,130,246,.15)', border: '1px solid rgba(59,130,246,.3)', color: '#60a5fa', fontSize: 12 }} onClick={() => openAward(p)}>
+                        <i className="bi bi-plus-circle me-1" />Award Pts
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Award Points Modal */}
+      {showModal && selected && (
+        <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 1050, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          onClick={() => setShowModal(false)}>
+          <div className="pp-card" style={{ maxWidth: 440, width: '100%' }} onClick={e => e.stopPropagation()}>
+            <h5 style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, marginBottom: 16 }}>Award Points — {selected.name}</h5>
+            <div className="mb-3 p-2 rounded d-flex justify-content-between" style={{ background: 'var(--c3)' }}>
+              <span style={{ color: 'var(--txt2)', fontSize: 13 }}>Current points</span>
+              <span style={{ fontFamily: "'Barlow Condensed'", fontSize: 22, fontWeight: 700, color: 'var(--acc)' }}>{selected.points}</span>
+            </div>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Points to Award</label>
+              <input type="number" className="form-control pp-input" placeholder="e.g. 300" min="1"
+                value={awardForm.points} onChange={e => setAwardForm({ ...awardForm, points: e.target.value })} />
+              {awardErrors.points && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{awardErrors.points}</div>}
+            </div>
+            <div className="mb-3">
+              <label className="form-label" style={{ fontSize: 13, color: 'var(--txt2)' }}>Reason</label>
+              <input className="form-control pp-input" placeholder="e.g. Special achievement"
+                value={awardForm.reason} onChange={e => setAwardForm({ ...awardForm, reason: e.target.value })} />
+              {awardErrors.reason && <div style={{ color: '#f87171', fontSize: 12, marginTop: 4 }}>{awardErrors.reason}</div>}
+            </div>
+            {awardErrors.server && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{awardErrors.server}</div>}
+            <div className="d-flex gap-2">
+              <button className="btn btn-ghost flex-fill" onClick={() => setShowModal(false)}>Cancel</button>
+              <button className="btn btn-acc flex-fill" onClick={handleAward} disabled={awarding}>
+                {awarding ? <span className="spinner-border spinner-border-sm me-2" /> : null}Award
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
